@@ -40,7 +40,7 @@ class TappablePolylineLayer extends PolylineLayer {
   /// The optional callback to call when no polyline was hit by the tap
   final void Function(TapUpDetails tapPosition)? onMiss;
 
-  TappablePolylineLayer({
+  const TappablePolylineLayer({
     this.polylines = const [],
     this.onTap,
     this.onMiss,
@@ -59,7 +59,8 @@ class TappablePolylineLayer extends PolylineLayer {
       polylineCulling
           ? polylines
               .where(
-                  (p) => p.boundingBox.isOverlapping(mapCamera.visibleBounds))
+                (p) => p.boundingBox.isOverlapping(mapCamera.visibleBounds),
+              )
               .toList()
           : polylines,
     );
@@ -83,18 +84,18 @@ class TappablePolylineLayer extends PolylineLayer {
       }
     }
 
-    return Container(
-      child: GestureDetector(
-        onDoubleTap: () {
-          // For some strange reason i have to add this callback for the onDoubleTapDown callback to be called.
-        },
-        onDoubleTapDown: (TapDownDetails details) {
-          _zoomMap(details, context);
-        },
-        onTapUp: (TapUpDetails details) {
-          _forwardCallToMapOptions(details, context);
-          _handlePolylineTap(details, onTap, onMiss);
-        },
+    return GestureDetector(
+      onDoubleTap: () {
+        // For some strange reason i have to add this callback for the onDoubleTapDown callback to be called.
+      },
+      onDoubleTapDown: (TapDownDetails details) {
+        _zoomMap(details, context);
+      },
+      onTapUp: (TapUpDetails details) {
+        _forwardCallToMapOptions(details, context);
+        _handlePolylineTap(details, onTap, onMiss);
+      },
+      child: MobileLayerTransformer(
         child: Stack(
           children: [
             CustomPaint(
@@ -108,7 +109,10 @@ class TappablePolylineLayer extends PolylineLayer {
   }
 
   void _handlePolylineTap(
-      TapUpDetails details, Function? onTap, Function? onMiss) {
+    TapUpDetails details,
+    Function? onTap,
+    Function? onMiss,
+  ) {
     // We might hit close to multiple polylines. We will therefore keep a reference to these in this map.
     Map<double, List<TaggedPolyline>> candidates = {};
 
@@ -136,10 +140,12 @@ class TappablePolylineLayer extends PolylineLayer {
 
         // To find the height when we only know the lengths of the sides, we can use Herons formula to get the Area.
         var semiPerimeter = (a + b + c) / 2.0;
-        var triangleArea = sqrt(semiPerimeter *
-            (semiPerimeter - a) *
-            (semiPerimeter - b) *
-            (semiPerimeter - c));
+        var triangleArea = sqrt(
+          semiPerimeter *
+              (semiPerimeter - a) *
+              (semiPerimeter - b) *
+              (semiPerimeter - c),
+        );
 
         // We can then finally calculate the length from the tapped point onto the line created by point1, point2.
         // Area of triangles is half the area of a rectangle
@@ -175,8 +181,12 @@ class TappablePolylineLayer extends PolylineLayer {
   }
 
   void _forwardCallToMapOptions(TapUpDetails details, BuildContext context) {
-    final latlng = _offsetToLatLng(details.localPosition, context.size!.width,
-        context.size!.height, context);
+    final latlng = _offsetToLatLng(
+      details.localPosition,
+      context.size!.width,
+      context.size!.height,
+      context,
+    );
 
     final mapOptions = MapOptions.of(context);
 
@@ -200,13 +210,21 @@ class TappablePolylineLayer extends PolylineLayer {
     final mapCamera = MapCamera.of(context);
     final mapController = MapController.of(context);
 
-    var newCenter = _offsetToLatLng(details.localPosition, context.size!.width,
-        context.size!.height, context);
+    var newCenter = _offsetToLatLng(
+      details.localPosition,
+      context.size!.width,
+      context.size!.height,
+      context,
+    );
     mapController.move(newCenter, mapCamera.zoom + 0.5);
   }
 
   LatLng _offsetToLatLng(
-      Offset offset, double width, double height, BuildContext context) {
+    Offset offset,
+    double width,
+    double height,
+    BuildContext context,
+  ) {
     final mapCamera = MapCamera.of(context);
 
     var localPoint = Point(offset.dx, offset.dy);
