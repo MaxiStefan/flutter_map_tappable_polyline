@@ -1,4 +1,3 @@
-
 library flutter_map_tappable_polyline;
 
 import 'dart:math';
