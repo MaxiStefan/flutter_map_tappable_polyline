@@ -10,7 +10,6 @@ import 'package:latlong2/latlong.dart';
 class TaggedPolyline extends Polyline {
   /// The name of the polyline
   final String? tag;
-
   final List<Offset> _offsets = [];
 
   TaggedPolyline({
@@ -27,6 +26,8 @@ class TaggedPolyline extends Polyline {
 }
 
 class TappablePolylineLayer extends PolylineLayer {
+  final _distance = const Distance();
+
   /// The list of [TaggedPolyline] which could be tapped
   @override
   final List<TaggedPolyline> polylines;
@@ -44,7 +45,7 @@ class TappablePolylineLayer extends PolylineLayer {
     this.polylines = const [],
     this.onTap,
     this.onMiss,
-    this.pointerDistanceTolerance = 15,
+    this.pointerDistanceTolerance = 10,
     polylineCulling = false,
     key,
   }) : super(key: key, polylines: polylines, polylineCulling: polylineCulling);
@@ -66,21 +67,30 @@ class TappablePolylineLayer extends PolylineLayer {
     );
   }
 
+  List<Offset> getOffsets(
+          Offset origin, List<LatLng> points, BuildContext context) =>
+      List.generate(
+        points.length,
+        (index) => getOffset(origin, points[index], context),
+        growable: false,
+      );
+  Offset getOffset(Offset origin, LatLng point, BuildContext context) {
+    final mapState = MapCamera.of(context);
+
+    // Critically create as little garbage as possible. This is called on every frame.
+    final projected = mapState.project(point);
+    return Offset(projected.x - origin.dx, projected.y - origin.dy);
+  }
+
   Widget _build(BuildContext context, Size size, List<TaggedPolyline> lines) {
     final mapState = MapCamera.of(context);
 
+    final origin = mapState.project(mapState.center).toOffset() -
+        mapState.size.toOffset() / 2;
     for (TaggedPolyline polyline in lines) {
       polyline._offsets.clear();
-      var i = 0;
       for (var point in polyline.points) {
-        var pos = mapState.project(point);
-        pos = (pos * mapState.getZoomScale(mapState.zoom, mapState.zoom)) -
-            mapState.pixelOrigin.toDoublePoint();
-        polyline._offsets.add(Offset(pos.x.toDouble(), pos.y.toDouble()));
-        if (i > 0 && i < polyline.points.length) {
-          polyline._offsets.add(Offset(pos.x.toDouble(), pos.y.toDouble()));
-        }
-        i++;
+        polyline._offsets.add(getOffset(origin, point, context));
       }
     }
 
@@ -93,7 +103,7 @@ class TappablePolylineLayer extends PolylineLayer {
       },
       onTapUp: (TapUpDetails details) {
         _forwardCallToMapOptions(details, context);
-        _handlePolylineTap(details, onTap, onMiss);
+        _handlePolylineTap(details, onTap, onMiss, context);
       },
       child: MobileLayerTransformer(
         child: Stack(
@@ -108,11 +118,55 @@ class TappablePolylineLayer extends PolylineLayer {
     );
   }
 
+  double _metersToStrokeWidth(
+    Offset origin,
+    LatLng p0,
+    Offset o0,
+    double strokeWidthInMeters,
+    BuildContext context,
+  ) {
+    final r = _distance.offset(p0, strokeWidthInMeters, 180);
+    final delta = o0 - getOffset(origin, r, context);
+    return delta.distance;
+  }
+
+  double getSqSegDist(
+    final double px,
+    final double py,
+    final double x0,
+    final double y0,
+    final double x1,
+    final double y1,
+  ) {
+    double dx = x1 - x0;
+    double dy = y1 - y0;
+    if (dx != 0 || dy != 0) {
+      final double t = ((px - x0) * dx + (py - y0) * dy) / (dx * dx + dy * dy);
+      if (t > 1) {
+        dx = px - x1;
+        dy = py - y1;
+        return dx * dx + dy * dy;
+      } else if (t > 0) {
+        dx = px - (x0 + dx * t);
+        dy = py - (y0 + dy * t);
+        return dx * dx + dy * dy;
+      }
+    }
+
+    dx = px - x0;
+    dy = py - y0;
+
+    return dx * dx + dy * dy;
+  }
+
   void _handlePolylineTap(
     TapUpDetails details,
     Function? onTap,
     Function? onMiss,
+    BuildContext context,
   ) {
+    final mapState = MapCamera.of(context);
+
     // We might hit close to multiple polylines. We will therefore keep a reference to these in this map.
     Map<double, List<TaggedPolyline>> candidates = {};
 
@@ -121,54 +175,44 @@ class TappablePolylineLayer extends PolylineLayer {
     // matches with the tapped point within the
     // pointerDistanceTolerance.
     for (TaggedPolyline currentPolyline in polylines) {
-      for (var j = 0; j < currentPolyline._offsets.length - 1; j++) {
-        // We consider the points point1, point2 and tap points in a triangle
-        var point1 = currentPolyline._offsets[j];
-        var point2 = currentPolyline._offsets[j + 1];
-        var tap = details.localPosition;
+      final origin = mapState.project(mapState.center).toOffset() -
+          mapState.size.toOffset() / 2;
+      final offsets = getOffsets(origin, currentPolyline.points, context);
 
-        // To determine if we have tapped in between two po ints, we
-        // calculate the length from the tapped point to the line
-        // created by point1, point2. If this distance is shorter
-        // than the specified threshold, we have detected a tap
-        // between two points.
-        //
-        // We start by calculating the length of all the sides using pythagoras.
-        var a = _distance(point1, point2);
-        var b = _distance(point1, tap);
-        var c = _distance(point2, tap);
+      final strokeWidth = currentPolyline.useStrokeWidthInMeter
+          ? _metersToStrokeWidth(
+              origin,
+              currentPolyline.points.first,
+              offsets.first,
+              currentPolyline.strokeWidth,
+              context,
+            )
+          : currentPolyline.strokeWidth;
+      final hittableDistance = max(
+        strokeWidth / 2 + currentPolyline.borderStrokeWidth / 2,
+        pointerDistanceTolerance,
+      );
 
-        // To find the height when we only know the lengths of the sides, we can use Herons formula to get the Area.
-        var semiPerimeter = (a + b + c) / 2.0;
-        var triangleArea = sqrt(
-          semiPerimeter *
-              (semiPerimeter - a) *
-              (semiPerimeter - b) *
-              (semiPerimeter - c),
+      for (int i = 0; i < offsets.length - 1; i++) {
+        final o1 = offsets[i];
+        final o2 = offsets[i + 1];
+
+        final distance = sqrt(
+          getSqSegDist(
+            details.localPosition.dx,
+            details.localPosition.dy,
+            o1.dx,
+            o1.dy,
+            o2.dx,
+            o2.dy,
+          ),
         );
-
-        // We can then finally calculate the length from the tapped point onto the line created by point1, point2.
-        // Area of triangles is half the area of a rectangle
-        // area = 1/2 base * height -> height = (2 * area) / base
-        var height = (2 * triangleArea) / a;
-
-        // We're not there yet - We need to satisfy the edge case
-        // where the perpendicular line from the tapped point onto
-        // the line created by point1, point2 (called point D) is
-        // outside of the segment point1, point2. We need
-        // to check if the length from D to the original segment
-        // (point1, point2) is less than the threshold.
-
-        var hypotenus = max(b, c);
-        var newTriangleBase = sqrt((hypotenus * hypotenus) - (height * height));
-        var lengthDToOriginalSegment = newTriangleBase - a;
-
-        if (height < pointerDistanceTolerance &&
-            lengthDToOriginalSegment < pointerDistanceTolerance) {
-          var minimum = min(height, lengthDToOriginalSegment);
-
-          candidates[minimum] ??= <TaggedPolyline>[];
-          candidates[minimum]!.add(currentPolyline);
+        if (distance < hittableDistance) {
+          if (candidates.containsKey(distance)) {
+            candidates[distance]!.add(currentPolyline);
+          } else {
+            candidates[distance] = [currentPolyline];
+          }
         }
       }
     }
@@ -195,15 +239,6 @@ class TappablePolylineLayer extends PolylineLayer {
 
     // Forward the onTap call to map.options so that we won't break onTap
     mapOptions.onTap?.call(tapPosition, latlng);
-  }
-
-  double _distance(Offset point1, Offset point2) {
-    var distancex = (point1.dx - point2.dx).abs();
-    var distancey = (point1.dy - point2.dy).abs();
-
-    var distance = sqrt((distancex * distancex) + (distancey * distancey));
-
-    return distance;
   }
 
   void _zoomMap(TapDownDetails details, BuildContext context) {
