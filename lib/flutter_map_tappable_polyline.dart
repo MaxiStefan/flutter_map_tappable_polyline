@@ -1,5 +1,3 @@
-library flutter_map_tappable_polyline;
-
 import 'dart:math';
 
 import 'package:flutter/widgets.dart';
@@ -10,7 +8,6 @@ import 'package:latlong2/latlong.dart';
 class TaggedPolyline extends Polyline {
   /// The name of the polyline
   final String? tag;
-  final List<Offset> _offsets = [];
 
   TaggedPolyline({
     required super.points,
@@ -67,67 +64,49 @@ class TappablePolylineLayer extends PolylineLayer {
     );
   }
 
-  List<Offset> getOffsets(
-          Offset origin, List<LatLng> points, BuildContext context) =>
-      List.generate(
-        points.length,
-        (index) => getOffset(origin, points[index], context),
-        growable: false,
-      );
-  Offset getOffset(Offset origin, LatLng point, BuildContext context) {
-    final mapState = MapCamera.of(context);
-
-    // Critically create as little garbage as possible. This is called on every frame.
-    final projected = mapState.project(point);
-    return Offset(projected.x - origin.dx, projected.y - origin.dy);
-  }
-
   Widget _build(BuildContext context, Size size, List<TaggedPolyline> lines) {
     final mapState = MapCamera.of(context);
 
-    final origin = mapState.project(mapState.center).toOffset() -
-        mapState.size.toOffset() / 2;
-    for (TaggedPolyline polyline in lines) {
-      polyline._offsets.clear();
-      for (var point in polyline.points) {
-        polyline._offsets.add(getOffset(origin, point, context));
-      }
-    }
-
-    return GestureDetector(
-      onDoubleTap: () {
-        // For some strange reason i have to add this callback for the onDoubleTapDown callback to be called.
-      },
-      onDoubleTapDown: (TapDownDetails details) {
-        _zoomMap(details, context);
-      },
-      onTapUp: (TapUpDetails details) {
-        _forwardCallToMapOptions(details, context);
-        _handlePolylineTap(details, onTap, onMiss, context);
-      },
-      child: MobileLayerTransformer(
-        child: Stack(
-          children: [
-            CustomPaint(
-              painter: PolylinePainter(lines, mapState),
-              size: size,
-            ),
-          ],
+    return MobileLayerTransformer(
+      child: GestureDetector(
+        onDoubleTap: () {
+          // For some strange reason i have to add this callback for the onDoubleTapDown callback to be called.
+        },
+        onDoubleTapDown: (TapDownDetails details) {
+          _zoomMap(details, context);
+        },
+        onTapUp: (TapUpDetails details) {
+          _forwardCallToMapOptions(details, context);
+          _handlePolylineTap(details, onTap, onMiss, mapState);
+        },
+        child: CustomPaint(
+          painter: PolylinePainter(lines, mapState),
+          size: size,
         ),
       ),
     );
   }
 
-  double _metersToStrokeWidth(
+  List<Offset> getOffsets(
     Offset origin,
-    LatLng p0,
-    Offset o0,
-    double strokeWidthInMeters,
-    BuildContext context,
-  ) {
-    final r = _distance.offset(p0, strokeWidthInMeters, 180);
-    final delta = o0 - getOffset(origin, r, context);
-    return delta.distance;
+    List<LatLng> points,
+    MapCamera mapState,
+  ) =>
+      List.generate(
+        points.length,
+        (index) => getOffset2(origin, points[index], mapState),
+        growable: false,
+      );
+  Offset getOffset(Offset origin, LatLng point, MapCamera mapState) {
+    // Critically create as little garbage as possible. This is called on every frame.
+    final projected = mapState.project(point, mapState.zoom);
+    return Offset(projected.x - origin.dx, projected.y - origin.dy);
+  }
+
+  Offset getOffset2(Offset origin, LatLng point, MapCamera camera) {
+    final crs = camera.crs;
+    final pos = crs.latLngToPoint(point, camera.zoom);
+    return Offset(pos.x - origin.dx, pos.y - origin.dy);
   }
 
   double getSqSegDist(
@@ -163,10 +142,8 @@ class TappablePolylineLayer extends PolylineLayer {
     TapUpDetails details,
     Function? onTap,
     Function? onMiss,
-    BuildContext context,
+    MapCamera mapState,
   ) {
-    final mapState = MapCamera.of(context);
-
     // We might hit close to multiple polylines. We will therefore keep a reference to these in this map.
     Map<double, List<TaggedPolyline>> candidates = {};
 
@@ -174,29 +151,29 @@ class TappablePolylineLayer extends PolylineLayer {
     // iterate over all the segments in the polyline to find any
     // matches with the tapped point within the
     // pointerDistanceTolerance.
-    for (TaggedPolyline currentPolyline in polylines) {
-      final origin = mapState.project(mapState.center).toOffset() -
-          mapState.size.toOffset() / 2;
-      final offsets = getOffsets(origin, currentPolyline.points, context);
+    for (final polyline in polylines) {
+      final origin =
+          mapState.project(mapState.center, mapState.zoom).toOffset() -
+              mapState.size.toOffset() / 2;
 
-      final strokeWidth = currentPolyline.useStrokeWidthInMeter
+      final offsets = getOffsets(origin, polyline.points, mapState);
+      final strokeWidth = polyline.useStrokeWidthInMeter
           ? _metersToStrokeWidth(
               origin,
-              currentPolyline.points.first,
+              polyline.points.first,
               offsets.first,
-              currentPolyline.strokeWidth,
-              context,
+              polyline.strokeWidth,
+              mapState,
             )
-          : currentPolyline.strokeWidth;
+          : polyline.strokeWidth;
       final hittableDistance = max(
-        strokeWidth / 2 + currentPolyline.borderStrokeWidth / 2,
+        strokeWidth / 2 + polyline.borderStrokeWidth / 2,
         pointerDistanceTolerance,
       );
 
       for (int i = 0; i < offsets.length - 1; i++) {
         final o1 = offsets[i];
         final o2 = offsets[i + 1];
-
         final distance = sqrt(
           getSqSegDist(
             details.localPosition.dx,
@@ -207,21 +184,34 @@ class TappablePolylineLayer extends PolylineLayer {
             o2.dy,
           ),
         );
-        if (distance < hittableDistance) {
-          if (candidates.containsKey(distance)) {
-            candidates[distance]!.add(currentPolyline);
-          } else {
-            candidates[distance] = [currentPolyline];
-          }
+        if (distance > hittableDistance) continue;
+        if (candidates.containsKey(distance)) {
+          candidates[distance]!.add(polyline);
+        } else {
+          candidates[distance] = [polyline];
         }
       }
     }
 
-    if (candidates.isEmpty) return onMiss?.call(details);
+    if (candidates.isEmpty) {
+      return;
+    }
 
     // We look up in the map of distances to the tap, and choose the shortest one.
     var closestToTapKey = candidates.keys.reduce(min);
     onTap!(candidates[closestToTapKey], details);
+  }
+
+  double _metersToStrokeWidth(
+    Offset origin,
+    LatLng p0,
+    Offset o0,
+    double strokeWidthInMeters,
+    MapCamera mapState,
+  ) {
+    final r = _distance.offset(p0, strokeWidthInMeters, 180);
+    final delta = o0 - getOffset(origin, r, mapState);
+    return delta.distance;
   }
 
   void _forwardCallToMapOptions(TapUpDetails details, BuildContext context) {
