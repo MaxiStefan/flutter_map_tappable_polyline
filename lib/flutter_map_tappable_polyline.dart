@@ -1,3 +1,5 @@
+// ignore_for_file: overridden_fields, avoid_dynamic_calls
+
 import 'dart:math';
 
 import 'package:flutter/widgets.dart';
@@ -6,9 +8,6 @@ import 'package:latlong2/latlong.dart';
 
 /// A polyline with a tag
 class TaggedPolyline extends Polyline {
-  /// The name of the polyline
-  final String? tag;
-
   TaggedPolyline({
     required super.points,
     super.strokeWidth = 1.0,
@@ -20,16 +19,29 @@ class TaggedPolyline extends Polyline {
     super.isDotted = false,
     this.tag,
   });
+
+  /// The name of the polyline
+  final String? tag;
 }
 
 class TappablePolylineLayer extends PolylineLayer {
-  final _distance = const Distance();
+  const TappablePolylineLayer({
+    this.polylines = const [],
+    this.onTap,
+    this.onMiss,
+    this.pointerDistanceTolerance = 15,
+    this.distance = const Distance(),
+    super.polylineCulling,
+    super.key,
+  }) : super(polylines: polylines);
+  final Distance distance;
 
   /// The list of [TaggedPolyline] which could be tapped
   @override
   final List<TaggedPolyline> polylines;
 
-  /// The tolerated distance between pointer and user tap to trigger the [onTap] callback
+  /// The tolerated distance between pointer and
+  /// user tap to trigger the [onTap] callback
   final double pointerDistanceTolerance;
 
   /// The callback to call when a polyline was hit by the tap
@@ -37,15 +49,6 @@ class TappablePolylineLayer extends PolylineLayer {
 
   /// The optional callback to call when no polyline was hit by the tap
   final void Function(TapUpDetails tapPosition)? onMiss;
-
-  const TappablePolylineLayer({
-    this.polylines = const [],
-    this.onTap,
-    this.onMiss,
-    this.pointerDistanceTolerance = 10,
-    polylineCulling = false,
-    key,
-  }) : super(key: key, polylines: polylines, polylineCulling: polylineCulling);
 
   @override
   Widget build(BuildContext context) {
@@ -70,7 +73,8 @@ class TappablePolylineLayer extends PolylineLayer {
     return MobileLayerTransformer(
       child: GestureDetector(
         onDoubleTap: () {
-          // For some strange reason i have to add this callback for the onDoubleTapDown callback to be called.
+          // For some strange reason i have to add this callback
+          // for the onDoubleTapDown callback to be called.
         },
         onDoubleTapDown: (TapDownDetails details) {
           _zoomMap(details, context);
@@ -94,33 +98,28 @@ class TappablePolylineLayer extends PolylineLayer {
   ) =>
       List.generate(
         points.length,
-        (index) => getOffset2(origin, points[index], mapState),
+        (index) => getOffset(origin, points[index], mapState),
         growable: false,
       );
   Offset getOffset(Offset origin, LatLng point, MapCamera mapState) {
-    // Critically create as little garbage as possible. This is called on every frame.
+    // Critically create as little garbage as possible.
+    // This is called on every frame.
     final projected = mapState.project(point, mapState.zoom);
     return Offset(projected.x - origin.dx, projected.y - origin.dy);
   }
 
-  Offset getOffset2(Offset origin, LatLng point, MapCamera camera) {
-    final crs = camera.crs;
-    final pos = crs.latLngToPoint(point, camera.zoom);
-    return Offset(pos.x - origin.dx, pos.y - origin.dy);
-  }
-
   double getSqSegDist(
-    final double px,
-    final double py,
-    final double x0,
-    final double y0,
-    final double x1,
-    final double y1,
+    double px,
+    double py,
+    double x0,
+    double y0,
+    double x1,
+    double y1,
   ) {
-    double dx = x1 - x0;
-    double dy = y1 - y0;
+    var dx = x1 - x0;
+    var dy = y1 - y0;
     if (dx != 0 || dy != 0) {
-      final double t = ((px - x0) * dx + (py - y0) * dy) / (dx * dx + dy * dy);
+      final t = ((px - x0) * dx + (py - y0) * dy) / (dx * dx + dy * dy);
       if (t > 1) {
         dx = px - x1;
         dy = py - y1;
@@ -144,8 +143,9 @@ class TappablePolylineLayer extends PolylineLayer {
     Function? onMiss,
     MapCamera mapState,
   ) {
-    // We might hit close to multiple polylines. We will therefore keep a reference to these in this map.
-    Map<double, List<TaggedPolyline>> candidates = {};
+    // We might hit close to multiple polylines. We will therefore
+    // keep a reference to these in this map.
+    final candidates = <double, List<TaggedPolyline>>{};
 
     // Calculating taps in between points on the polyline. We
     // iterate over all the segments in the polyline to find any
@@ -157,21 +157,8 @@ class TappablePolylineLayer extends PolylineLayer {
               mapState.size.toOffset() / 2;
 
       final offsets = getOffsets(origin, polyline.points, mapState);
-      final strokeWidth = polyline.useStrokeWidthInMeter
-          ? _metersToStrokeWidth(
-              origin,
-              polyline.points.first,
-              offsets.first,
-              polyline.strokeWidth,
-              mapState,
-            )
-          : polyline.strokeWidth;
-      final hittableDistance = max(
-        strokeWidth / 2 + polyline.borderStrokeWidth / 2,
-        pointerDistanceTolerance,
-      );
 
-      for (int i = 0; i < offsets.length - 1; i++) {
+      for (var i = 0; i < offsets.length - 1; i++) {
         final o1 = offsets[i];
         final o2 = offsets[i + 1];
         final distance = sqrt(
@@ -184,7 +171,7 @@ class TappablePolylineLayer extends PolylineLayer {
             o2.dy,
           ),
         );
-        if (distance > hittableDistance) continue;
+        if (distance > pointerDistanceTolerance) continue;
         if (candidates.containsKey(distance)) {
           candidates[distance]!.add(polyline);
         } else {
@@ -197,11 +184,13 @@ class TappablePolylineLayer extends PolylineLayer {
       return;
     }
 
-    // We look up in the map of distances to the tap, and choose the shortest one.
-    var closestToTapKey = candidates.keys.reduce(min);
+    // We look up in the map of distances to the tap,
+    // and choose the shortest one.
+    final closestToTapKey = candidates.keys.reduce(min);
     onTap!(candidates[closestToTapKey], details);
   }
 
+  // ignore: unused_element
   double _metersToStrokeWidth(
     Offset origin,
     LatLng p0,
@@ -209,7 +198,7 @@ class TappablePolylineLayer extends PolylineLayer {
     double strokeWidthInMeters,
     MapCamera mapState,
   ) {
-    final r = _distance.offset(p0, strokeWidthInMeters, 180);
+    final r = distance.offset(p0, strokeWidthInMeters, 180);
     final delta = o0 - getOffset(origin, r, mapState);
     return delta.distance;
   }
@@ -235,7 +224,7 @@ class TappablePolylineLayer extends PolylineLayer {
     final mapCamera = MapCamera.of(context);
     final mapController = MapController.of(context);
 
-    var newCenter = _offsetToLatLng(
+    final newCenter = _offsetToLatLng(
       details.localPosition,
       context.size!.width,
       context.size!.height,
@@ -252,11 +241,11 @@ class TappablePolylineLayer extends PolylineLayer {
   ) {
     final mapCamera = MapCamera.of(context);
 
-    var localPoint = Point(offset.dx, offset.dy);
-    var localPointCenterDistance =
+    final localPoint = Point(offset.dx, offset.dy);
+    final localPointCenterDistance =
         Point((width / 2) - localPoint.x, (height / 2) - localPoint.y);
-    var mapCenter = mapCamera.project(mapCamera.center);
-    var point = mapCenter - localPointCenterDistance;
+    final mapCenter = mapCamera.project(mapCamera.center);
+    final point = mapCenter - localPointCenterDistance;
     return mapCamera.unproject(point);
   }
 }
